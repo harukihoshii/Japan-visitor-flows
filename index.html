@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Japan Tourist Movement Flow</title>
+    <link rel='stylesheet' href='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css' />
+    <script src='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js'></script>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+        }
+
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+        }
+
+        #slider {
+            width: 200px;
+            margin-right: 10px;
+        }
+
+        #year-label {
+            font-weight: bold;
+        }
+
+        .legend {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background-color: white;
+            padding: 15px;
+            /* Updated padding */
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            width: 220px;
+            /* Updated width */
+        }
+
+        .prefecture-info {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #333333;
+        }
+
+        .prefecture-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .flow-info {
+            font-size: 16px;
+            color: #333333;
+        }
+
+        .legend-title {
+            font-weight: bold;
+            margin: 15px 0 5px 0;
+            /* Updated margin */
+            color: #333333;
+            /* Dark grey color */
+        }
+
+        .legend-bar {
+            height: 10px;
+            background: linear-gradient(to right, #fef0d9, #fdcc8a, #fc8d59, #e34a33, #b30000);
+            margin-bottom: 5px;
+            border-radius: 2px;
+            /* Added border-radius */
+        }
+
+        .legend-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #333333;
+            /* Dark grey color */
+        }
+
+        .legend-description {
+            font-size: 12px;
+            margin-top: 10px;
+            /* Updated margin */
+            color: #333333;
+            /* Dark grey color */
+            line-height: 1.4;
+            /* Added line-height */
+        }
+
+        .data-source {
+            font-size: 10px;
+            color: #666;
+            margin-top: 10px;
+            /* Updated margin */
+        }
+
+        #flow-summary {
+            position: absolute;
+            top: 180px;
+            left: 20px;
+            z-index: 10;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            width: 200px;
+            display: none;
+            color: #333333;
+        }
+
+        #flow-summary h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #333333;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <div class="control-panel">
+        <input id="slider" type="range" min="2014" max="2022" step="1" value="2022">
+        <span id="year-label">2022</span>
+    </div>
+    <div class="legend">
+        <div id="prefecture-info" class="prefecture-info"></div>
+        <div class="legend-title">Movement flow</div>
+        <div class="legend-bar"></div>
+        <div class="legend-labels">
+            <span>Low</span>
+            <span>High</span>
+        </div>
+        <div class="legend-description">
+            Where do visitors in Japan go next? 
+            The map shows Level of movement flow going out of the prefecture in Japan over time. Data for 2020 and 2021 is not collected due to Covid-19. Click
+            prefecture to see the flow levels leaving the prefecture to other prefectures.
+        </div>
+    </div>
+    <div id="flow-summary">
+        <h3>Flow Summary</h3>
+        <p id="year-flow"></p>
+    </div>
+
+    <script>
+        let map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://api.maptiler.com/maps/46c24713-bf1c-4289-a392-c0b13f2b81a6/style.json?key=LuQyF0uyEnwGzH9qVszX',
+            center: [138.2529, 36.2048],
+            zoom: 4
+        });
+
+        const slider = document.getElementById('slider');
+        const yearLabel = document.getElementById('year-label');
+        const prefectureInfo = document.getElementById('prefecture-info');
+        const flowSummary = document.getElementById('flow-summary');
+        const yearFlowElement = document.getElementById('year-flow');
+
+        let selectedPrefecture = null;
+        let flowData = {};
+
+        map.on('load', function () {
+            map.addControl(new maplibregl.NavigationControl());
+
+            // Add custom data sources to the existing attribution control
+            map.getContainer().querySelector('.maplibregl-ctrl-attrib-inner').innerHTML += `
+                | Data sources: 
+                <a href="https://www.gsi.go.jp/kankyochiri/gm_jpn.html" target="_blank">国土地理院</a>,
+                <a href="https://www.mlit.go.jp/sogoseisaku/soukou/sogoseisaku_soukou_fr_000023.html" target="_blank">訪日外国人流動データ</a>
+            `;
+
+            map.addSource('prefectures', {
+                type: 'geojson',
+                data: 'data/cleaned/prefectures.geojson',
+            });
+
+            map.addSource('flow-lines', {
+                type: 'geojson',
+                data: 'data/cleaned/od-flow-2014-2022.geojson',
+            });
+
+            map.addLayer({
+                id: 'prefectures',
+                type: 'fill',
+                source: 'prefectures',
+                paint: {
+                    'fill-color': 'rgba(255, 255, 255, 0.7)',
+                    'fill-outline-color': '#808080'
+                }
+            });
+
+            map.addLayer({
+                id: 'flow-lines',
+                type: 'line',
+                source: 'flow-lines',
+                paint: {
+                    'line-width': [
+                        'interpolate',
+                        ['linear'],
+                        ['get', 'flow2022'],
+                        0, 1,
+                        100, 10
+                    ],
+                    'line-color': [
+                        'interpolate',
+                        ['linear'],
+                        ['get', 'flow2022'],
+                        0.1, '#fef0d9',
+                        0.5, '#fdcc8a',
+                        10, '#fc8d59',
+                        100, '#e34a33',
+                        1000, '#b30000'
+                    ],
+                },
+                layout: {
+                    'line-join': 'round',
+                    'line-cap': 'round',
+                    'visibility': 'none'
+                },
+            });
+
+            map.on('click', 'prefectures', (e) => {
+                const clickedOriginId = e.features[0].properties.Origin_id;
+                selectedPrefecture = clickedOriginId;
+
+                // Ensure visibility is updated immediately
+                map.setLayoutProperty('flow-lines', 'visibility', 'visible');
+                map.setFilter('flow-lines', ['==', ['get', 'origin_id'], clickedOriginId]);
+
+                // Update UI even before data is fully processed
+                prefectureInfo.innerHTML = `<div class="prefecture-name">Loading...</div>`;
+
+                // Ensure function runs fully on first click
+                setTimeout(updateFlowSummary, 50);
+            });
+
+
+            map.on('click', (e) => {
+                const features = map.queryRenderedFeatures(e.point, { layers: ['prefectures'] });
+                if (!features.length) {
+                    selectedPrefecture = null;
+                    prefectureInfo.textContent = '';
+                    map.setLayoutProperty('flow-lines', 'visibility', 'none');
+                }
+            });
+        });
+
+        slider.addEventListener('input', function () {
+            let selectedYear = parseInt(slider.value);
+
+            if (selectedYear === 2020 || selectedYear === 2021) {
+                selectedYear = 2022;
+                slider.value = 2022;
+            }
+
+            yearLabel.textContent = selectedYear;
+
+            const yearProperty = `flow${selectedYear}`;
+
+            map.setPaintProperty('flow-lines', 'line-width', [
+                'interpolate',
+                ['linear'],
+                ['get', yearProperty],
+                0, 1,
+                100, 10
+            ]);
+
+            map.setPaintProperty('flow-lines', 'line-color', [
+                'interpolate',
+                ['linear'],
+                ['get', yearProperty],
+                0.1, '#fef0d9',
+                0.5, '#fdcc8a',
+                10, '#fc8d59',
+                100, '#e34a33',
+                1000, '#b30000'
+            ]);
+
+            if (selectedPrefecture) {
+                updateFlowSummary();
+            }
+        });
+
+        function updateFlowSummary() {
+    if (selectedPrefecture) {
+        const flowLines = map.querySourceFeatures('flow-lines', {
+            filter: ['==', ['get', 'origin_id'], selectedPrefecture]
+        });
+
+        const prefectureFeature = map.querySourceFeatures('prefectures', {
+            filter: ['==', ['get', 'Origin_id'], selectedPrefecture]
+        })[0];
+
+        if (!prefectureFeature) {
+            console.error('Prefecture feature not found');
+            return;
+        }
+
+        const prefectureName = prefectureFeature.properties.nam;
+        const selectedYear = parseInt(slider.value);
+        const yearProperty = `flow${selectedYear}`;
+
+        console.log(`Calculating total flow for ${prefectureName} in ${selectedYear}`);
+        
+        // Create an object to store unique flows by destination
+        const uniqueFlows = {};
+        
+        // Only keep one flow value per destination
+        flowLines.forEach(line => {
+            const destId = line.properties.destination_id;
+            uniqueFlows[destId] = parseFloat(line.properties[yearProperty]) || 0;
+        });
+
+        // Sum up all unique flows
+        const totalRawFlow = Object.values(uniqueFlows).reduce((acc, flow) => acc + flow, 0);
+        
+        // Scale the flow value
+        const scaledFlow = Math.round(totalRawFlow * 1000);
+
+        console.log(`Number of unique destinations: ${Object.keys(uniqueFlows).length}`);
+        console.log(`Total raw flow: ${totalRawFlow}`);
+        console.log(`Scaled flow: ${scaledFlow}`);
+
+        // Debug each unique flow
+        Object.entries(uniqueFlows).forEach(([destId, flow]) => {
+            console.log(`Flow from ${selectedPrefecture} to ${destId}: ${flow}`);
+        });
+
+        prefectureInfo.innerHTML = `
+            <div class="prefecture-name">${prefectureName}</div>
+            <div class="flow-info">
+                <strong>${scaledFlow.toLocaleString()}</strong>  
+                <br>
+                <span style="color: #666;">Number of visitor out in ${selectedYear}</span>
+            </div>
+        `;
+    }
+}
+
+// Add this helper function to assist with debugging
+function debugFlowData(prefectureId) {
+    const flowLines = map.querySourceFeatures('flow-lines', {
+        filter: ['==', ['get', 'origin_id'], prefectureId]
+    });
+    
+    console.log(`Debug data for prefecture ${prefectureId}:`);
+    flowLines.forEach(line => {
+        console.log('Flow line properties:', line.properties);
+    });
+}
+
+    </script>
+</body>
+
+</html>
